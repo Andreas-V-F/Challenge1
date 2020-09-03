@@ -2,7 +2,6 @@ package com.example.potholedetection;
 
 import androidx.appcompat.app.AppCompatActivity;
 
-import android.content.Context;
 import android.hardware.Sensor;
 import android.hardware.SensorEvent;
 import android.hardware.SensorEventListener;
@@ -18,6 +17,10 @@ import android.widget.TextView;
 import java.io.File;
 import java.io.FileWriter;
 import java.io.IOException;
+import java.lang.*;
+import java.security.Timestamp;
+import java.text.SimpleDateFormat;
+import java.util.Date;
 
 public class MainActivity extends AppCompatActivity {
 
@@ -30,6 +33,11 @@ public class MainActivity extends AppCompatActivity {
 
     private SensorManager sensorManager;
     private Sensor accelerometer;
+
+    private float[] currentValues = {0,0,0};
+    private float[] previousValues = {0,0,0};
+    private float treshhold = 3;
+    private boolean tagOnMap = false;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -53,7 +61,7 @@ public class MainActivity extends AppCompatActivity {
                 Log.d(SENSOR_TAG, "Writing sensor data to " + getStorageDir());
 
                 try {
-                    writer = new FileWriter(new File(getStorageDir(), "accelerometer_" + System.currentTimeMillis() + ".csv"));
+                    writer = new FileWriter(new File(getStorageDir(), "accelerometer_" + System.currentTimeMillis() + ".txt"));
                 } catch (IOException e) {
                     e.printStackTrace();
                 }
@@ -89,15 +97,59 @@ public class MainActivity extends AppCompatActivity {
         return this.getExternalFilesDir(null).getAbsolutePath();
         //  return "/file/path/";
     }
+
+    public static String getCurrentTimeStamp() {
+        SimpleDateFormat sdfDate = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss:SSS");//dd/MM/yyyy
+        Date now = new Date();
+        String strDate = sdfDate.format(now);
+        return strDate;
+    }
     private SensorEventListener sensorEventListener = new SensorEventListener() {
         @Override
         public void onSensorChanged(SensorEvent sensorEvent) {
-            float[] values = sensorEvent.values;
-                accelReadings.setText(String.format(
-                        "x axis: %.3f m/s^2," +
+
+            if (sensorEvent.accuracy == SensorManager.SENSOR_STATUS_UNRELIABLE)
+            {
+                return;
+            }
+//            Log.d(SENSOR_TAG, "PREV , current: " + currentValues[1] + "\tprev: " + previousValues[1]);
+            currentValues = sensorEvent.values.clone();
+//            Log.d(SENSOR_TAG, "NEXT , current: " + currentValues[1] + "\tprev: " + previousValues[1]);
+            if(!isStarted)
+            {
+                isStarted = true;
+                previousValues = currentValues;
+//                Log.d(SENSOR_TAG, "ISsTARTED: " + isStarted);
+            }
+            accelReadings.setText(String.format(
+                                "x axis: %.3f m/s^2," +
                                 "\ny axis: %.3f m/s^2," +
                                 "\nz axis: %.3f m/s^2",
-                        values[0], values[1], values[2]));
+                    currentValues[0], currentValues[1], currentValues[2]));
+
+            /*Calculate moving average*/
+            System.out.println(currentValues[0] + ", " + currentValues[1] + ", " + currentValues[2]);
+            currentValues[0] = (currentValues[0] + previousValues[0])/2;
+            currentValues[1] = (currentValues[1] + previousValues[1])/2;
+            currentValues[2] = (currentValues[2] + previousValues[2])/2;
+            /*********************************************************/
+//            Log.d(SENSOR_TAG, "AFTER FILTER , current: " + currentValues[0] + "\tprev: " + previousValues[0]);
+            if(Math.abs(currentValues[0] - previousValues[0]) > treshhold || Math.abs(currentValues[1] - previousValues[1]) > treshhold || Math.abs(currentValues[2] - previousValues[2]) > treshhold)
+            {
+                tagOnMap = true;
+                Log.d(SENSOR_TAG, "TAG PLACED , current: " + currentValues[0] + "\tprev: " + previousValues[0]);
+            }
+            else
+            {
+                tagOnMap = false;
+            }
+
+//            Log.d(SENSOR_TAG, "tagOnMap = " + tagOnMap);'
+            if(currentValues != previousValues)
+            {
+                previousValues = currentValues.clone();
+            }
+
         }
 
         @Override
@@ -109,7 +161,7 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onResume() {
         super.onResume();
-            sensorManager.registerListener(sensorEventListener, accelerometer, SensorManager.SENSOR_DELAY_UI);
+            sensorManager.registerListener(sensorEventListener, accelerometer, SensorManager.SENSOR_DELAY_NORMAL);
     }
 
     private SensorEventListener2 sensorEventListener2 = new SensorEventListener2() {
@@ -123,7 +175,7 @@ public class MainActivity extends AppCompatActivity {
             if(isStarted)
             {
                 try {
-                    writer.write(String.format("%d; ACC; %f; %f; %f; %f; %f; %f\n", sensorEvent.timestamp, sensorEvent.values[0], sensorEvent.values[1], sensorEvent.values[2], 0.f, 0.f, 0.f));
+                    writer.write(String.format("%s ; ACC; %f; %f; %f\n", getCurrentTimeStamp(), sensorEvent.values[0], sensorEvent.values[1], sensorEvent.values[2]));
                 } catch (IOException e) {
                     e.printStackTrace();
                 }
