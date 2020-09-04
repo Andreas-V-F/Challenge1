@@ -120,8 +120,8 @@ public class MainActivity extends AppCompatActivity implements SensorEventListen
                 Log.d(SENSOR_TAG, "Writing sensor data to " + getStorageDir());
 
                 try {
-                    writerRawData = new FileWriter(new File(getStorageDir() + "RAW/", "accelerometer_RAW_" + System.currentTimeMillis() + ".csv"));
-                    writerRawData = new FileWriter(new File(getStorageDir() + "FILTERED/", "accelerometer_FILTERED_" + System.currentTimeMillis() + ".csv"));
+                    writerRawData = new FileWriter(new File(getStorageDir(), "accelerometer_RAW_" + System.currentTimeMillis() + ".txt"));
+                    writerFilteredData = new FileWriter(new File(getStorageDir(), "accelerometer_FILTERED_" + System.currentTimeMillis() + ".txt"));
                 } catch (IOException e) {
                     e.printStackTrace();
                 }
@@ -211,14 +211,14 @@ public class MainActivity extends AppCompatActivity implements SensorEventListen
             String name = "";
             tagOnMap = true;
             Log.d(SENSOR_TAG, "TAG PLACED , current: " + currentValues[0] + "\tprev: " + previousValues[0]);
-            if(Math.abs(currentValues[0] - previousValues[0]) > treshhold || Math.abs(currentValues[1] - previousValues[1]) > treshhold || Math.abs(currentValues[2] - previousValues[2]) > treshhold){
-                name = "Pothole #" + j;
-                j++;
-            }
-            else{
+            name = "Pothole #" + j;
+            j++;
+
+            if(Math.abs(currentValues[0] - previousValues[0]) > treshhold/2 || Math.abs(currentValues[1] - previousValues[1]) > treshhold/2 || Math.abs(currentValues[2] - previousValues[2]) > treshhold/2){
                 name = "Speedbump #" + i;
                 i++;
             }
+
             mMap.addMarker(new MarkerOptions()
                     .position(new LatLng(lati, longi))
                     .title(name));
@@ -231,8 +231,8 @@ public class MainActivity extends AppCompatActivity implements SensorEventListen
         if(isStarted)
         {
             try {
-                writerRawData.write(String.format("%s ; ACC; %f; %f; %f\n", getCurrentTimeStamp(), sensorEvent.values[0], sensorEvent.values[1], sensorEvent.values[2]));  // write raw sensor readings to file
-                writerFilteredData.write(String.format("%s ; ACC; %f; %f; %f\n", getCurrentTimeStamp(), currentValues[0], currentValues[1], currentValues[2]));  // write filtered readings to a file
+                writerRawData.write(String.format("%s ; ACC; %f; %f; %f; %f; %f\n", getCurrentTimeStamp(), sensorEvent.values[0], sensorEvent.values[1], sensorEvent.values[2], lati, longi));  // write raw sensor readings to file
+                writerFilteredData.write(String.format("%s ; ACC; %f; %f; %f; %f; %f\n", getCurrentTimeStamp(), currentValues[0], currentValues[1], currentValues[2], lati, longi));  // write filtered readings to a file
             } catch (IOException e) {
                 e.printStackTrace();
             }
