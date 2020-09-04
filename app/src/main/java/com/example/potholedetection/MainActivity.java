@@ -6,6 +6,7 @@ import androidx.core.app.ActivityCompat;
 import androidx.fragment.app.FragmentTransaction;
 
 import android.Manifest;
+import android.annotation.SuppressLint;
 import android.content.Context;
 import android.content.pm.PackageManager;
 import android.hardware.Sensor;
@@ -39,29 +40,41 @@ import java.io.FileWriter;
 import java.io.IOException;
 import java.text.SimpleDateFormat;
 import java.util.Date;
+import java.util.stream.Stream;
 
-public class MainActivity extends AppCompatActivity implements LocationListener, OnMapReadyCallback {
+public class MainActivity extends AppCompatActivity implements SensorEventListener, SensorEventListener2, LocationListener, OnMapReadyCallback {
     protected LocationManager locationManager;
-    TextView txtLat;
+    private TextView txtLat;
     private TextView accelReadings;
+
     Button buttonStart;
     Button buttonStop;
-    boolean isStarted;
-    FileWriter writer;
+    Button buttonCalibrate;
+
+
+    FileWriter writerRawData;
+    FileWriter writerFilteredData;
     final String SENSOR_TAG = "Sensor log";
     private GoogleMap mMap;
     private Marker mMarker;
     private SensorManager sensorManager;
     private Sensor accelerometer;
-    double lati;
-    double longi;
-    int i;
-    int j;
+//    private Sensor gravitySensor;
+
+    private double lati;
+    private double longi;
+    private int i;
+    private int j;
 
     private float[] currentValues = {0,0,0};
     private float[] previousValues = {0,0,0};
+    private float[] calibrationValues = {0,0,0};
     private float treshhold = 3;
+
     private boolean tagOnMap = false;
+    private boolean isCalibrated = false;
+    boolean isStarted = false;
+    boolean isFirstRead = true;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -69,22 +82,19 @@ public class MainActivity extends AppCompatActivity implements LocationListener,
         setContentView(R.layout.activity_main);
 
         i = 1;
-        isStarted = false;
-        buttonStart = (Button) findViewById(R.id.buttonStart);
-        buttonStop = (Button) findViewById(R.id.buttonStop);
+        buttonStart = findViewById(R.id.buttonStart);
+        buttonStop = findViewById(R.id.buttonStop);
+        buttonCalibrate = findViewById(R.id.buttonCalibrate);
 
         accelReadings = findViewById(R.id.accelReadings);
-        sensorManager = (SensorManager) getSystemService(SENSOR_SERVICE);
-        accelerometer = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER);
+        sensorManager = (SensorManager) getSystemService(Context.SENSOR_SERVICE);
+        accelerometer = sensorManager.getDefaultSensor(Sensor.TYPE_LINEAR_ACCELERATION);
+
         txtLat = findViewById(R.id.textview1);
-        MapFragment mapFragment = (MapFragment) getFragmentManager()
-                .findFragmentById(R.id.map);
+        MapFragment mapFragment = (MapFragment) getFragmentManager().findFragmentById(R.id.map);
 
         mapFragment.getMapAsync(this);
         checkPermission();
-
-
-
 
         locationManager = (LocationManager) getSystemService(Context.LOCATION_SERVICE);
         if (ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED && ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
@@ -110,17 +120,19 @@ public class MainActivity extends AppCompatActivity implements LocationListener,
                 Log.d(SENSOR_TAG, "Writing sensor data to " + getStorageDir());
 
                 try {
-                    writer = new FileWriter(new File(getStorageDir(), "accelerometer_" + System.currentTimeMillis() + ".csv"));
+                    writerRawData = new FileWriter(new File(getStorageDir() + "RAW/", "accelerometer_RAW_" + System.currentTimeMillis() + ".csv"));
+                    writerRawData = new FileWriter(new File(getStorageDir() + "FILTERED/", "accelerometer_FILTERED_" + System.currentTimeMillis() + ".csv"));
                 } catch (IOException e) {
                     e.printStackTrace();
                 }
 
-                sensorManager.registerListener(sensorEventListener2, sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER), 0);
+                sensorManager.registerListener(MainActivity.this, accelerometer, SensorManager.SENSOR_DELAY_GAME);
 
                 isStarted = true;
                 return true;
             }
         });
+
         buttonStop.setOnTouchListener(new View.OnTouchListener() {
             @Override
             public boolean onTouch(View view, MotionEvent motionEvent) {
@@ -128,10 +140,11 @@ public class MainActivity extends AppCompatActivity implements LocationListener,
                 buttonStart.setEnabled(true);
                 buttonStop.setEnabled(false);
 
-                sensorManager.flush(sensorEventListener2);
-                sensorManager.unregisterListener(sensorEventListener2);
+                sensorManager.flush(MainActivity.this);
+                sensorManager.unregisterListener(MainActivity.this);
                 try {
-                    writer.close();
+                    writerRawData.close();
+                    writerFilteredData.close();
                 } catch (IOException e) {
                     e.printStackTrace();
                 }
@@ -142,124 +155,103 @@ public class MainActivity extends AppCompatActivity implements LocationListener,
         });
     }
 
-    private String getStorageDir() {
-        return this.getExternalFilesDir(null).getAbsolutePath();
-        //  return "/file/path/";
-    }
-
-    public void checkPermission() {
-        if (Build.VERSION.SDK_INT >= 23) {
-            if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED && checkSelfPermission(android.Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
-
-
-            } else {
-                ActivityCompat.requestPermissions(this, new String[]{
-                        Manifest.permission.ACCESS_FINE_LOCATION,
-                        Manifest.permission.ACCESS_COARSE_LOCATION,}, 1);
-            }
-        }
-    }
-
     @Override
     protected void onResume() {
         super.onResume();
-            sensorManager.registerListener(sensorEventListener, accelerometer, SensorManager.SENSOR_DELAY_UI);
+            sensorManager.registerListener(this, accelerometer, SensorManager.SENSOR_DELAY_GAME);
     }
-    public static String getCurrentTimeStamp() {
-        SimpleDateFormat sdfDate = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss:SSS");//dd/MM/yyyy
-        Date now = new Date();
-        String strDate = sdfDate.format(now);
-        return strDate;
+
+    @Override
+    public void onSensorChanged(SensorEvent sensorEvent) {
+
+        currentValues = sensorEvent.values.clone(); // get sensor's current readings
+
+        currentValues[0] = currentValues[0] - calibrationValues[0];
+        currentValues[1] = currentValues[1] - calibrationValues[1];
+        currentValues[2] = currentValues[2] - calibrationValues[2];
+
+        /*If reading first time assign current values to previous values to avoid false positive*/
+        if(isFirstRead)
+        {
+            isFirstRead = false;
+            previousValues = currentValues.clone();
+        }
+        /*
+        *   NOTE: Calibrate when phone is lying on a flat surface.
+        *   Calibration values are subtracted from current value readings
+        */
+        buttonCalibrate.setOnTouchListener(new View.OnTouchListener() {
+            @Override
+            public boolean onTouch(View view, MotionEvent motionEvent) {
+                if(!isCalibrated) {
+                    calibrationValues = currentValues.clone();
+                    isCalibrated = true;
+                }
+                Log.d(SENSOR_TAG, "CALIBRATION_VALUES , x: " + calibrationValues[0] + "y: " + calibrationValues[1] + "z: " + calibrationValues[2]);
+                return true;
+            }
+        });
+
+        accelReadings.setText(String.format(
+                "x axis: %.3f m/s^2," +
+                        "\ny axis: %.3f m/s^2," +
+                        "\nz axis: %.3f m/s^2",
+                currentValues[0], currentValues[1], currentValues[2]));
+
+
+        /*Calculate moving average*/
+        System.out.println(currentValues[0] + ", " + currentValues[1] + ", " + currentValues[2]);
+        currentValues[0] = (currentValues[0] + previousValues[0])/2;
+        currentValues[1] = (currentValues[1] + previousValues[1])/2;
+        currentValues[2] = (currentValues[2] + previousValues[2])/2;
+        /*********************************************************/
+
+        if(Math.abs(currentValues[0] - previousValues[0]) > treshhold || Math.abs(currentValues[1] - previousValues[1]) > treshhold || Math.abs(currentValues[2] - previousValues[2]) > treshhold)
+        {
+            String name = "";
+            tagOnMap = true;
+            Log.d(SENSOR_TAG, "TAG PLACED , current: " + currentValues[0] + "\tprev: " + previousValues[0]);
+            if(Math.abs(currentValues[0] - previousValues[0]) > treshhold || Math.abs(currentValues[1] - previousValues[1]) > treshhold || Math.abs(currentValues[2] - previousValues[2]) > treshhold){
+                name = "Pothole #" + j;
+                j++;
+            }
+            else{
+                name = "Speedbump #" + i;
+                i++;
+            }
+            mMap.addMarker(new MarkerOptions()
+                    .position(new LatLng(lati, longi))
+                    .title(name));
+        }
+        else
+        {
+            tagOnMap = false;
+        }
+
+        if(isStarted)
+        {
+            try {
+                writerRawData.write(String.format("%s ; ACC; %f; %f; %f\n", getCurrentTimeStamp(), sensorEvent.values[0], sensorEvent.values[1], sensorEvent.values[2]));  // write raw sensor readings to file
+                writerFilteredData.write(String.format("%s ; ACC; %f; %f; %f\n", getCurrentTimeStamp(), currentValues[0], currentValues[1], currentValues[2]));  // write filtered readings to a file
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+        }
+
+            previousValues = currentValues.clone();
+
+
     }
-    private SensorEventListener sensorEventListener = new SensorEventListener() {
-        @Override
-        public void onSensorChanged(SensorEvent sensorEvent) {
 
-            if (sensorEvent.accuracy == SensorManager.SENSOR_STATUS_UNRELIABLE)
-            {
-                return;
-            }
-//            Log.d(SENSOR_TAG, "PREV , current: " + currentValues[1] + "\tprev: " + previousValues[1]);
-            currentValues = sensorEvent.values.clone();
-//            Log.d(SENSOR_TAG, "NEXT , current: " + currentValues[1] + "\tprev: " + previousValues[1]);
-            if(!isStarted)
-            {
-                isStarted = true;
-                previousValues = currentValues;
-//                Log.d(SENSOR_TAG, "ISsTARTED: " + isStarted);
-            }
-            accelReadings.setText(String.format(
-                    "x axis: %.3f m/s^2," +
-                            "\ny axis: %.3f m/s^2," +
-                            "\nz axis: %.3f m/s^2",
-                    currentValues[0], currentValues[1], currentValues[2]));
+    @Override
+    public void onAccuracyChanged(Sensor sensor, int i) {
 
-            /*Calculate moving average*/
-            System.out.println(currentValues[0] + ", " + currentValues[1] + ", " + currentValues[2]);
-            currentValues[0] = (currentValues[0] + previousValues[0])/2;
-            currentValues[1] = (currentValues[1] + previousValues[1])/2;
-            currentValues[2] = (currentValues[2] + previousValues[2])/2;
-            /*********************************************************/
-//            Log.d(SENSOR_TAG, "AFTER FILTER , current: " + currentValues[0] + "\tprev: " + previousValues[0]);
-            if(Math.abs(currentValues[0] - previousValues[0]) > treshhold || Math.abs(currentValues[1] - previousValues[1]) > treshhold || Math.abs(currentValues[2] - previousValues[2]) > treshhold)
-            {
-                String name = "";
-                tagOnMap = true;
-                Log.d(SENSOR_TAG, "TAG PLACED , current: " + currentValues[0] + "\tprev: " + previousValues[0]);
-                if(Math.abs(currentValues[0] - previousValues[0]) > 5 || Math.abs(currentValues[1] - previousValues[1]) > 5 || Math.abs(currentValues[2] - previousValues[2]) > 5){
-                    name = "Pothole #" + j;
-                    j++;
-                }
-                else{
-                    name = "Speedbump #" + i;
-                    i++;
-                }
-                mMap.addMarker(new MarkerOptions()
-                        .position(new LatLng(lati, longi))
-                        .title(name));
-            }
-            else
-            {
-                tagOnMap = false;
-            }
+    }
 
-//            Log.d(SENSOR_TAG, "tagOnMap = " + tagOnMap);'
-            if(currentValues != previousValues)
-            {
-                previousValues = currentValues.clone();
-            }
+    @Override
+    public void onFlushCompleted(Sensor sensor) {
 
-
-        }
-        @Override
-        public void onAccuracyChanged(Sensor sensor, int i) {
-
-        }
-    };
-
-    private SensorEventListener2 sensorEventListener2 = new SensorEventListener2() {
-        @Override
-        public void onFlushCompleted(Sensor sensor) {
-
-        }
-
-        @Override
-        public void onSensorChanged(SensorEvent sensorEvent) {
-            if(isStarted)
-            {
-                try {
-                    writer.write(String.format("%s ; ACC; %f; %f; %f\n", getCurrentTimeStamp(), sensorEvent.values[0], sensorEvent.values[1], sensorEvent.values[2]));
-                } catch (IOException e) {
-                    e.printStackTrace();
-                }
-            }
-        }
-
-        @Override
-        public void onAccuracyChanged(Sensor sensor, int i) {
-
-        }
-    };
+    }
 
     @Override
     public void onLocationChanged(@NonNull Location location) {
@@ -268,7 +260,7 @@ public class MainActivity extends AppCompatActivity implements LocationListener,
         lati = location.getLatitude();
         longi = location.getLongitude();
         mMarker.setPosition(new LatLng(lati, longi));
-        txtLat.setText("Latitude:" + lati + ", Longitude:" + longi);
+        txtLat.setText(String.format("Latitude: %.3f, Longitude: %.3f", lati, longi));
         float zoomLevel = 16.0f; //This goes up to 21
         mMap.moveCamera(CameraUpdateFactory.newLatLngZoom(new LatLng(lati, longi), zoomLevel));
 
@@ -291,4 +283,37 @@ public class MainActivity extends AppCompatActivity implements LocationListener,
             checkPermission();
         }
     }
+
+    /**
+     * Returns file path on the phone where data is stored
+     * @return "/file/path/";
+     */
+    private String getStorageDir() {
+        return this.getExternalFilesDir(null).getAbsolutePath();
+    }
+
+    /**
+     * Gets current time stamp
+     * @return string with timestamp
+     */
+    private static String getCurrentTimeStamp() {
+        SimpleDateFormat sdfDate = new SimpleDateFormat("HH:mm:ss:SSS");
+        Date now = new Date();
+        String strDate = sdfDate.format(now);
+        return strDate;
+    }
+
+    private void checkPermission() {
+        if (Build.VERSION.SDK_INT >= 23) {
+            if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED && checkSelfPermission(android.Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
+
+
+            } else {
+                ActivityCompat.requestPermissions(this, new String[]{
+                        Manifest.permission.ACCESS_FINE_LOCATION,
+                        Manifest.permission.ACCESS_COARSE_LOCATION,}, 1);
+            }
+        }
+    }
 }
+
